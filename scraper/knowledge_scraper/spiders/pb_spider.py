@@ -22,9 +22,9 @@ class PbSpider(Spider):
     allowed_domains = ["bazawiedzy.pb.edu.pl"]
     custom_settings = {
         "ITEM_PIPELINES" : {
-            "knowledge_scraper.pipelines.ValidationPipeline" : 100,
-            #"knowledge_scraper.pipelines.DbValidationPipeline" : 100,
-            #"knowledge_scraper.pipelines.DbStoragePipeline" : 300,
+            #"knowledge_scraper.pipelines.ValidationPipeline" : 100,
+            "knowledge_scraper.pipelines.DbValidationPipeline" : 100,
+            "knowledge_scraper.pipelines.DbStoragePipeline" : 300,
             "knowledge_scraper.pipelines.ExportPreparationPipeline" : 900,
         },
         'AUTOTHROTTLE_ENABLED' : True,
@@ -41,8 +41,8 @@ class PbSpider(Spider):
 
         #maximum number of items that spider can process
         #should be an integer greater than or equal to 0 
-        self.MAX_SCIENTISTS_PROCESSED = 0
-        self.MAX_PUBLICATIONS_PROCESSED = 0
+        self.MAX_SCIENTISTS_PROCESSED = 1_000_000
+        self.MAX_PUBLICATIONS_PROCESSED = 1_000_000
 
 
         #constants
@@ -79,6 +79,14 @@ class PbSpider(Spider):
             "faculty" : "institute",
             "institute" : "institute", 
             "department" : "department"
+        }
+ 
+        #dict mapping organization types present on pb website to their importance
+        self.PB_ORG_TYPES_TO_IMPORTANCE = {
+            "university" : 200, 
+            "faculty" : 150,
+            "institute" : 100, 
+            "department" : 50
         }
 
 
@@ -130,7 +138,7 @@ class PbSpider(Spider):
 
     #deducts organization_type using its name
     #return org type as str or None
-    def get_organization_type(self, name:str|None):
+    def get_pb_organization_type(self, name:str|None):
         if not is_non_empty_str(name):
             return None
 
@@ -142,11 +150,9 @@ class PbSpider(Spider):
         #iterating over pb organization types
         for keyword in self.PB_TO_DB_ORG_TYPES.keys():
             if keyword in name.lower():
-                # assigning database accepted organization types
-                return self.PB_TO_DB_ORG_TYPES[keyword]
+                return keyword
 
         return None
-
 
 
     #needs to return something so if MAIN_REQUESTS_GEN returns None will load landing page
@@ -175,7 +181,8 @@ class PbSpider(Spider):
             organization["name"] = name
 
             #deducing organization_type
-            organization["organization_type"] = self.get_organization_type(name)
+            pb_org_type = self.get_pb_organization_type(name)
+            organization["organization_type"] = self.PB_TO_DB_ORG_TYPES.get( pb_org_type )
 
             #generating organization id based on its url
             organization_url = anchor.css( css_path + " > div a.normal-link::attr(href)").get()
@@ -220,7 +227,6 @@ class PbSpider(Spider):
             return True
 
 
-            
         for organization in parse_li_node( response, "li#ttree\\:0"):
             #assuming that all departments have unique names which they should have
             self.cathedras[organization["name"]] = organization["identifier"]
@@ -333,66 +339,9 @@ class PbSpider(Spider):
         yield request
     #end of parse_people
 
-    #add research_area
     #parses scientist's profile page
     async def parse_author(self, response, scientist_item):
         self.logger.debug("started parse_author")
-
-        #returns an ordered list of organizations with index-0 being the best fit
-        #returns an empty list if it does't find any mathcing organizations.
-        #if cathedras is filled will use it to filter out organizations not in it
-        #orgs is a list of scrapy selectors pointing to 'a' objects with organization information
-        def get_organization_ids(orgs):
-            org_type_to_ids = {}
-
-            #getting organization types on pb website
-            order = list( self.PB_TO_DB_ORG_TYPES.keys() )
-            #sorting from lowest to highest based on provided hierarchy
-            order.reverse()
-
-            for key in order:
-                org_type_to_ids[key] = []
-
-            #returns tuple of str (org_type,id) or None for a singur organization 'a'
-            def get_type_and_id(a):
-                name = a.css("span::text").get()
-                org_type = self.get_organization_type(name)
-                if not org_type:
-                    return None
-
-                #use cathedras if available
-                if self.cathedras:
-                    identifier = self.cathedras.get(name)
-                    if identifier:
-                        return org_type, identifier
-                    else:
-                        return None
-                    #end of if-else
-                #end of if
-
-                identifier = get_id( a.css("::attr(href)").get() )
-                if not identifier:
-                    return None
-
-                return org_type, identifier
-            #end of get_type_and_id
-            
-            for a in orgs:
-                type_and_id = get_type_and_id( a )
-                if type_and_id is None:
-                    continue
-                org_type, identifier = type_and_id
-                org_type_to_ids[org_type].append(identifier)
-            #end of for
-
-            #making result list
-            org_ids = []
-            for key in order:
-                org_ids += org_type_to_ids[key]
-
-            return org_ids
-        #end of get_organization_ids
-
 
         container = response.css("div#authorProfileBasicInfoPanel") #container with organizations and email
         if container:
@@ -401,13 +350,16 @@ class PbSpider(Spider):
             orgs = []
             for a in org_contaniners:
                 name = a.css("span::text").get()
-                org_type = self.get_organization_type( name )
+                org_type = self.get_pb_organization_type( name )
+                if not org_type or org_type not in self.PB_ORG_TYPES_TO_IMPORTANCE:
+                    continue
+                org_importance = self.PB_ORG_TYPES_TO_IMPORTANCE[org_type]
                 org_id = get_id( a.css("::attr(href)").get() )
 
                 if not org_type or not org_id:
                     continue
 
-                orgs.append( (org_type, org_id) )
+                orgs.append( (org_importance, org_id) )
             #end of for
             scientist_item["organizations"] = orgs
                 
@@ -416,9 +368,12 @@ class PbSpider(Spider):
 
         #scraping research areas
         # stop scraping if null
+        research_areas = response.css("span.authorSimple::text").getall() #science discipline only
+        if not research_areas:
+            self.logger.warning( get_stopped_scraping_item(scientist_item, "no research_areas found") )
+            return #research_areas are crucial
         scientist_item["research_areas"] = response.css("span.authorSimple::text").getall() #science discipline only
 
-        #yield scientist_item
 
         #scraping bibliometrics
         bibl = ItemLoader(item=BibliometricsItem(), response=response)
@@ -430,32 +385,32 @@ class PbSpider(Spider):
         container = response.css("div.achievementsTable > ul") #contains "Achievement summary" table
         path = "li:nth-child(1)" #path from container to li with publication_count
         if not container or not container.css(path + " > span::text").get() == "Publications":
-            self.logger.warning( get_stopped_scraping_item(bibl.load_item(), "no publication_count found") ) #profile_url=scientist_item["profile_url"]) )
+            self.logger.warning( get_stopped_scraping_item(bibl.load_item(), "no publication_count found") )
             return #publication_count is crucial
 
 
         publi_count_text = container.css(path + " a::text").get()
         publi_count = basic_conversion.try_make_int(publi_count_text)
         if publi_count is None:
-            self.logger.warning( get_stopped_scraping_item(bibl.load_item(), 'no publication_count found', profile_url=scientist_item["profile_url"]) )
+            self.logger.warning( get_stopped_scraping_item(bibl.load_item(), 'no publication_count found') )
             return #publication_count is crucial
         bibl.add_value("publication_count", publi_count)
 
         bibliometry_container  = response.css("ul.bibliometric-data-list") #contains "Bibliometry*"
         if not bibliometry_container:
-            self.logger.warning( get_stopped_scraping_item(bibl.load_item(), 'no "Bibliometry*" table found -> no ministerial_score found', profile_url=scientist_item["profile_url"]) )
+            self.logger.warning( get_stopped_scraping_item(bibl.load_item(), 'no "Bibliometry*" table found -> no ministerial_score found') )
             return #ministerial_score is crucial
 
         #scraping ministerial_score
         mini_score_text = bibliometry_container.css('div.hIndexItem::text').getall()
         if not mini_score_text:
-            self.logger.warning( get_stopped_scraping_item(bibl.load_item(), 'no ministerial_score found', profile_url=scientist_item["profile_url"]) )
+            self.logger.warning( get_stopped_scraping_item(bibl.load_item(), 'no ministerial_score found') )
             return #ministerial_score is crucial
 
         mini_score_text = "".join(mini_score_text) #probably use processors.Concatenate
         mini_score = basic_conversion.try_make_float(mini_score_text)
         if mini_score is None:
-            self.logger.warning( get_stopped_scraping_item(bibl.load_item(), "invalid ministerial score found", profile_url=scientist_item["profile_url"]) )
+            self.logger.warning( get_stopped_scraping_item(bibl.load_item(), "invalid ministerial score found") )
             return #ministerial_score is crucial
         bibl.add_value("ministerial_score", mini_score)
   

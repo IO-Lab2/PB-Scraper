@@ -61,8 +61,6 @@ def select_match(table, search_param, conn, col_to_return=None):
         col_to_return, table, search_conditions) 
     
 
-    print( query.as_string(conn) )
-
     with conn.cursor() as cur:
         cur.execute( query, search_values )
         result = cur.fetchone()

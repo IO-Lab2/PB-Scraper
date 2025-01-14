@@ -52,13 +52,13 @@ class ValidationPipeline:
         key: key to acces the value you want to validate, 
         '''
         if not key in item:
-            logger.info( get_item_msg("Validation: set field to null", item, f"validate_and_null: provided key {add_parenthesis(key)} is not in item", add_identifier=True) )
+            logger.debug( get_item_msg("Validation: set field to null", item, f"validate_and_null: provided key {add_parenthesis(key)} is not in item", add_identifier=True) )
             item[key] = None
             return
 
         value = item[key]
         if value is None:
-            logger.info( get_item_msg("Validation: set field to null", item, f"validate_and_null: value corresponding to key {add_parenthesis(key)} is None. Nothing to do", add_identifier=True) )
+            logger.debug( get_item_msg("Validation: set field to null", item, f"validate_and_null: value corresponding to key {add_parenthesis(key)} is None. Nothing to do", add_identifier=True) )
             return
 
         is_valid = basic_validation.validate_obj(value, *validation_funcs, process_independently=process_independently)
@@ -67,7 +67,7 @@ class ValidationPipeline:
             #value and is_valid are iterables
 
             if len(value) == 0:
-                logger.info( get_item_msg("Validation: set field to empty list", item, f"{key} has no elements", add_identifier=True) )
+                logger.debug( get_item_msg("Validation: set field to empty list", item, f"{key} has no elements", add_identifier=True) )
                 item[key] = []
                 return
 
@@ -122,33 +122,6 @@ class ValidationPipeline:
             raise DropItem( get_item_msg("Validation: dropped item", item, f"validate_and_drop: {get_invalid_value_msg(item, key)}") )
     #end of validate_and_drop
 
-    '''
-    CREATE TABLE IF NOT EXISTS scientists (
-        id UUID DEFAULT uuid_generate_v4 () PRIMARY KEY,
-        first_name VARCHAR(100) NOT NULL,
-        last_name VARCHAR(100) NOT NULL,
-        academic_title VARCHAR(50) NOT NULL,
-        position VARCHAR(255), ??? are all positions valid
-        research_area VARCHAR(255) NOT NULL, - to do
-        email VARCHAR(255),
-        profile_url TEXT,
-        college VARCHAR(100),
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
-    '''
-    '''
-    class ScientistItem(Item):
-        first_name = Field()
-        last_name = Field()
-        academic_title = Field()
-        position = Field()
-        email = Field()
-        organization_id = Field()
-        profile_url = Field()
-        identifier  = Field()
-        research_areas = Field()
-    '''
 
     #only to be used with ScientistItem
     def validate_scientist(self, sc):
@@ -160,7 +133,7 @@ class ValidationPipeline:
         self.validate_and_drop(sc, "academic_title", basic_validation.validate_academic_title)
 
         #drop if invalid, maybe check against a list of valid ones
-        self.validate_and_null(sc, "research_areas", basic_validation.is_non_empty_str, (basic_validation.length_check, 255), process_independently=True)
+        self.validate_and_drop(sc, "research_areas", basic_validation.is_non_empty_str, (basic_validation.length_check, 255), process_independently=True)
 
         #NULLABLE
         self.validate_and_null(sc, "position", basic_validation.is_non_empty_str, (basic_validation.length_check, 255))
@@ -188,67 +161,17 @@ class ValidationPipeline:
         self.validate_bibliometrics( sc["bibliometrics_item"] )
 
 
-    '''
-    -- Table for storing bibliometric indicators of scientists
-    CREATE TABLE bibliometrics (
-        id UUID DEFAULT uuid_generate_v4 () PRIMARY KEY,
-        h_index_wos INTEGER, -- Optional
-        h_index_scopus INTEGER,
-        publication_count INTEGER NOT NULL,
-        ministerial_score FLOAT NOT NULL,
-        scientist_id UUID REFERENCES scientists (id) ON DELETE CASCADE,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
-    '''
-    '''
-    class BibliometricsItem(scrapy.Item):
-        -- add UUID ------------------- 
-        scientist_id = scrapy.Field()
-	    h_index_wos = scrapy.Field()
-	    h_index_scopus = scrapy.Field()
-	    publication_count = scrapy.Field()
-	    ministerial_score = scrapy.Field()
-    '''
-
     #only to be used with BibliometricsItem
     def validate_bibliometrics(self, bibl):
         #NOT NULL
         self.validate_and_drop(bibl, "publication_count", basic_validation.is_non_negative_int)
         self.validate_and_drop(bibl, "ministerial_score", basic_validation.is_non_negative_float)
-        #self.validate_and_drop(bibl, "scientist_id", basic_validation.validate_uuid_str) #check in database
         self.validate_and_drop(bibl, "scientist_ref", basic_validation.validate_weak_ref)
 
         #NULLABLE
         self.validate_and_null(bibl, "h_index_wos", basic_validation.is_non_negative_int)
         self.validate_and_null(bibl, "h_index_scopus", basic_validation.is_non_negative_int)
 
-
-    '''
-    -- Table for storing information about publications
-    CREATE TABLE publications (
-        id UUID DEFAULT uuid_generate_v4 () PRIMARY KEY,
-        title TEXT NOT NULL,
-        journal VARCHAR(255),
-        publisher VARCHAR(255),
-        journal_type VARCHAR(255),
-        publication_date DATE, 
-        journal_impact_factor FLOAT, - punktoza
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
-    '''
-    '''
-    class PublicationItem(scrapy.Item):
-        scientist_id = scrapy.Field()
-        identifier = scrapy.Field()
-        journal_type = scrapy.Field()
-        publication_year = scrapy.Field()
-        title = scrapy.Field()
-        journal = scrapy.Field()
-        publisher = scrapy.Field()
-        ministerial_score = scrapy.Field()
-    '''
 
     #only to be used with PublicationItem
     def validate_publication(self, publ):
@@ -266,24 +189,6 @@ class ValidationPipeline:
         #NOT IN THE TABLE
         self.validate_and_drop(publ, "scientist_ids", basic_validation.validate_uuid_str, process_independently=True) #NOT NULL -> check in database
 
-
-    '''
-    -- Table for storing information about organizations
-    CREATE TABLE IF NOT EXISTS organizations (
-        id UUID DEFAULT uuid_generate_v4 () PRIMARY KEY,
-        name VARCHAR(255) NOT NULL,
-        type organization NOT NULL, ??? PB has different organization types than SGGW --check it
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
-    '''
-    '''
-    class OrganizationItem(Item):
-        organization_type = Field()
-        name = Field()
-        identifier = Field()
-        parent_id = Field() - to do
-    '''
 
     #only to be used with OrganizationItem
     def validate_organization(self, org):
@@ -305,15 +210,15 @@ class ValidationPipeline:
 class DbValidationPipeline(ValidationPipeline):
     def __init__(self):
         self.conn = make_connection() #deliberate no exception handling - if no connection gets established, this pipeline is not supposed to work
-        self.items_processed = 0 #temp
+        #self.items_processed = 0 #temp
         
     def close_spider(self, spider):
         self.conn.close()
 
     def process_item(self, item, spider):
-        self.items_processed += 1
+        '''self.items_processed += 1
         if self.items_processed > 2:
-            raise DropItem("item count exceeded")
+            raise DropItem("item count exceeded")'''
 
         return super().process_item(item,spider)
 
@@ -335,7 +240,7 @@ class DbValidationPipeline(ValidationPipeline):
     #end of validate_organization
 
 
-    def filter_in_db(self, ids, table, key=None, include_removed=False)
+    def filter_in_db(self, ids, table, key=None, include_removed=False):
         '''
         checks if ids are in table in database
 
@@ -360,10 +265,8 @@ class DbValidationPipeline(ValidationPipeline):
                 self.error(f"filter_in_db: sth went wrong when querying the database - {e}")
             mask.append(exists)
 
-        return filter_values(ids, mask, include_romoved=include_removed)
+        return filter_values(ids, mask, include_removed=include_removed)
     #end of filter_in_db
-
- 
 
 
     def validate_scientist(self, sc):
@@ -374,8 +277,9 @@ class DbValidationPipeline(ValidationPipeline):
         orgs, removed_orgs = self.filter_in_db(orgs, "organizations", key=lambda p: p[1], include_removed=True)
 
         #logging
-        removed_text = " ".join( [ f'({p[0]}, {add_parenthesis(p[1])});' for p in removed_orgs ] )
-        logger.info(f"validate_scientist: organizations {removed_text} could not be found in database")
+        if removed_orgs:
+            removed_text = " ".join( [ f'({p[0]}, {add_parenthesis(p[1])});' for p in removed_orgs ] )
+            logger.info(f"validate_scientist: organizations {removed_text} could not be found in database")
 
         if not orgs:
             raise DropItem( get_item_msg("Validation: dropped item", sc, "ScientistItem had no valid organizations") )
@@ -387,14 +291,15 @@ class DbValidationPipeline(ValidationPipeline):
         super().validate_publication(publi)
 
         sc_ids = publi["scientist_ids"]
-        valid_ids, removed_ids = filter_in_db(sc_ids, "scientists", include_romoved=True)
+        valid_ids, removed_ids = self.filter_in_db(sc_ids, "scientists", include_removed=True)
  
         #logging
-        removed_text = ", ".join( [ add_parenthesis(id) for id in removed_ids ] )
-        logger.info(f"validate_publication: scientists {removed_text} could not be found in database")
+        if removed_ids:
+            removed_text = ", ".join( [ add_parenthesis(id) for id in removed_ids ] )
+            logger.debug(f"validate_publication: scientists {removed_text} could not be found in database")
 
         if not valid_ids:
-            raise DropItem( get_item_msg("Validation: dropped item", sc, "PublicationItem had no valid scientist_ids") )
+            raise DropItem( get_item_msg("Validation: dropped item", publi, "None of PublicationItem's scientist_ids were in database") )
 
         publi["scientist_ids"] = valid_ids
     #end of validate_publication
@@ -467,6 +372,7 @@ class DbStoragePipeline:
             identifier = sc["identifier"], 
             conn = self.conn,
             values = {
+                "id" : sc["identifier"],
                 "first_name" : sc["first_name"],
                 "last_name" : sc["last_name"],
                 "academic_title" : sc["academic_title"],
@@ -489,14 +395,14 @@ class DbStoragePipeline:
         )
 
         #storing bibliometrics
-        biblio = sc["bibliometrics"]
+        biblio = sc["bibliometrics_item"]
         insert_or_update_matched(
             table = "bibliometrics", 
             search_param = {"scientist_id" : sc["identifier"]},
             conn = self.conn, 
             values = {
                 "h_index_wos" : biblio["h_index_wos"],
-                "h_index_scopus" biblio["h_index_scopus"],
+                "h_index_scopus" : biblio["h_index_scopus"],
                 "publication_count" : biblio["publication_count"],
                 "ministerial_score" : biblio["ministerial_score"],
                 "scientist_id" : sc["identifier"],
@@ -530,7 +436,9 @@ class DbStoragePipeline:
 
     def store_publication(self, publi):
         #storing publication
-        publication_date = date( publi["publication_year"], 1, 1)
+        publication_date = publi["publication_year"]
+        if publication_date is not None:
+            publication_date = date( publication_date, 1, 1)
 
         insert_or_update_with_id(
             table = "publications",
@@ -554,12 +462,12 @@ class DbStoragePipeline:
                 table = "scientists_publications",
                 search_param = {
                     "publication_id" : publi["identifier"],
-                    "scientist_id", sc_id
+                    "scientist_id" : sc_id
                 },
                 conn = self.conn,
                 values = {
                     "publication_id" : publi["identifier"],
-                    "scientist_id", sc_id
+                    "scientist_id" : sc_id
                 }
             )
     #end of store_publication
